@@ -263,6 +263,12 @@ components:
         - read
         - publish
 
+    WebRTCKLVDataChannelFormat:
+      type: string
+      enum:
+        - raw
+        - timed
+
     AlwaysAvailableTrack:
       type: object
       properties:
@@ -736,10 +742,16 @@ components:
           deprecated: true
         webrtcIPsFromInterfaces:
           type: boolean
+        webrtcIPsFromInterfacesExcludeList:
+          type: array
+          items:
+            type: string
         webrtcIPsFromInterfacesList:
           type: array
           items:
             type: string
+        webrtcKLVDataChannelFormat:
+          $ref: "#/components/schemas/WebRTCKLVDataChannelFormat"
         webrtcLocalTCPAddress:
           type: string
         webrtcLocalUDPAddress:

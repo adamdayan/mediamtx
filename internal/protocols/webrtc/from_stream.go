@@ -16,10 +16,12 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtpvp8"
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtpvp9"
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/g711"
+	"github.com/bluenviron/mediacommon/v2/pkg/codecs/h264"
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/opus"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 
+	"github.com/bluenviron/mediamtx/internal/conf"
 	"github.com/bluenviron/mediamtx/internal/formatlabel"
 	"github.com/bluenviron/mediamtx/internal/logger"
 	"github.com/bluenviron/mediamtx/internal/stream"
@@ -27,9 +29,17 @@ import (
 )
 
 const (
-	webrtcPayloadMaxSize   = 1188 // 1200 - 12 (RTP header)
-	audioPTSDriftTolerance = 500 * time.Millisecond
+	webrtcPayloadMaxSize    = 1188 // 1200 - 12 (RTP header)
+	audioPTSDriftTolerance  = 500 * time.Millisecond
+	seiUserDataUnregistered = 5
 )
+
+var djiSEIUserDataUnregisteredUUID = [16]byte{
+	0x81, 0x6d, 0x38, 0x4e,
+	0x99, 0x8c, 0x11, 0xea,
+	0xb2, 0x94, 0x02, 0xfc,
+	0xdc, 0x4e, 0x74, 0x12,
+}
 
 var multichannelOpusSDP = map[int]string{
 	3: "channel_mapping=0,2,1;num_streams=2;coupled_streams=1",
@@ -68,9 +78,100 @@ func ptsDriftExceeded(pts uint32, firstPTS uint32, tolerance uint32) bool {
 	return delta > int32(tolerance) || delta < -int32(tolerance)
 }
 
+func h264SEIHasUserDataUnregisteredUUID(nalu []byte, target [16]byte) bool {
+	pos := 1
+	zeroCount := 0
+
+	readByte := func() (byte, bool) {
+		for pos < len(nalu) {
+			b := nalu[pos]
+			pos++
+
+			if zeroCount >= 2 && b == 0x03 {
+				zeroCount = 0
+				continue
+			}
+
+			if b == 0x00 {
+				zeroCount++
+			} else {
+				zeroCount = 0
+			}
+
+			return b, true
+		}
+
+		return 0, false
+	}
+
+	for {
+		payloadType := 0
+		for {
+			b, ok := readByte()
+			if !ok {
+				return false
+			}
+			payloadType += int(b)
+			if b != 0xff {
+				break
+			}
+		}
+
+		payloadSize := 0
+		for {
+			b, ok := readByte()
+			if !ok {
+				return false
+			}
+			payloadSize += int(b)
+			if b != 0xff {
+				break
+			}
+		}
+
+		if payloadType == seiUserDataUnregistered && payloadSize >= len(target) {
+			matches := true
+			for _, expected := range target {
+				actual, ok := readByte()
+				if !ok {
+					return false
+				}
+				matches = matches && actual == expected
+			}
+			if matches {
+				return true
+			}
+			payloadSize -= len(target)
+		}
+
+		for range payloadSize {
+			if _, ok := readByte(); !ok {
+				return false
+			}
+		}
+	}
+}
+
+func writeVideoPackets(
+	track *OutboundTrack,
+	u *unit.Unit,
+	packets []*rtp.Packet,
+	timestampMapper *videoTimestampMapper,
+) {
+	for i, pkt := range packets {
+		ntp := u.NTP.Add(timestampToDuration(int64(pkt.Timestamp), 90000))
+		pkt.Timestamp += u.RTPPackets[0].Timestamp
+		if i == 0 && timestampMapper != nil {
+			timestampMapper.update(u.PTS, pkt.Timestamp)
+		}
+		track.WriteRTPWithNTP(pkt, ntp) //nolint:errcheck
+	}
+}
+
 func setupVideoTrack(
 	desc *description.Session,
 	r *stream.Reader,
+	timestampMapper *videoTimestampMapper,
 ) (*OutboundTrack, error) {
 	var av1Format *format.AV1
 	media := desc.FindFormat(&av1Format)
@@ -105,11 +206,7 @@ func setupVideoTrack(
 					return nil //nolint:nilerr
 				}
 
-				for _, pkt := range packets {
-					ntp := u.NTP.Add(timestampToDuration(int64(pkt.Timestamp), 90000))
-					pkt.Timestamp += u.RTPPackets[0].Timestamp
-					track.WriteRTPWithNTP(pkt, ntp) //nolint:errcheck
-				}
+				writeVideoPackets(track, u, packets, timestampMapper)
 
 				return nil
 			})
@@ -152,11 +249,7 @@ func setupVideoTrack(
 					return nil //nolint:nilerr
 				}
 
-				for _, pkt := range packets {
-					ntp := u.NTP.Add(timestampToDuration(int64(pkt.Timestamp), 90000))
-					pkt.Timestamp += u.RTPPackets[0].Timestamp
-					track.WriteRTPWithNTP(pkt, ntp) //nolint:errcheck
-				}
+				writeVideoPackets(track, u, packets, timestampMapper)
 
 				return nil
 			})
@@ -197,11 +290,7 @@ func setupVideoTrack(
 					return nil //nolint:nilerr
 				}
 
-				for _, pkt := range packets {
-					ntp := u.NTP.Add(timestampToDuration(int64(pkt.Timestamp), 90000))
-					pkt.Timestamp += u.RTPPackets[0].Timestamp
-					track.WriteRTPWithNTP(pkt, ntp) //nolint:errcheck
-				}
+				writeVideoPackets(track, u, packets, timestampMapper)
 
 				return nil
 			})
@@ -253,11 +342,7 @@ func setupVideoTrack(
 					return nil //nolint:nilerr
 				}
 
-				for _, pkt := range packets {
-					ntp := u.NTP.Add(timestampToDuration(int64(pkt.Timestamp), 90000))
-					pkt.Timestamp += u.RTPPackets[0].Timestamp
-					track.WriteRTPWithNTP(pkt, ntp) //nolint:errcheck
-				}
+				writeVideoPackets(track, u, packets, timestampMapper)
 
 				return nil
 			})
@@ -305,16 +390,27 @@ func setupVideoTrack(
 				}
 				lastPTS = u.PTS
 
-				packets, err2 := encoder.Encode(u.Payload.(unit.PayloadH264))
+				// filter out SEI NALUs with DJI user data that cause browser decoding to get stuck.
+				// https://github.com/bluenviron/mediamtx/issues/5221
+				au := u.Payload.(unit.PayloadH264)
+				filteredAU := make(unit.PayloadH264, 0, len(au))
+				for _, nalu := range au {
+					if h264.NALUType(nalu[0]&0x1F) != h264.NALUTypeSEI ||
+						!h264SEIHasUserDataUnregisteredUUID(nalu, djiSEIUserDataUnregisteredUUID) {
+						filteredAU = append(filteredAU, nalu)
+					}
+				}
+
+				if len(filteredAU) == 0 {
+					return nil
+				}
+
+				packets, err2 := encoder.Encode(filteredAU)
 				if err2 != nil {
 					return nil //nolint:nilerr
 				}
 
-				for _, pkt := range packets {
-					ntp := u.NTP.Add(timestampToDuration(int64(pkt.Timestamp), 90000))
-					pkt.Timestamp += u.RTPPackets[0].Timestamp
-					track.WriteRTPWithNTP(pkt, ntp) //nolint:errcheck
-				}
+				writeVideoPackets(track, u, packets, timestampMapper)
 
 				return nil
 			})
@@ -702,15 +798,24 @@ func setupAudioTrack(
 func setupKLVDataChannel(
 	desc *description.Session,
 	r *stream.Reader,
+	klvDataChannelFormat conf.WebRTCKLVDataChannelFormat,
+	timestampMapper *videoTimestampMapper,
 ) (*OutboundDataChannel, error) {
 	var klvFormat *format.KLV
 	media := desc.FindFormat(&klvFormat)
 
 	if klvFormat != nil {
-		dataChan := &OutboundDataChannel{
-			Label: "KLV",
+		timed := klvDataChannelFormat == conf.WebRTCKLVDataChannelFormatTimed
+		label := rawKLVDataChannelLabel
+		if timed {
+			label = timedKLVDataChannelLabel
 		}
 
+		dataChan := &OutboundDataChannel{
+			Label: label,
+		}
+
+		var missingVideoTimestampCount uint64
 		r.OnData(
 			media,
 			klvFormat,
@@ -719,7 +824,26 @@ func setupKLVDataChannel(
 					return nil
 				}
 
-				dataChan.Write(u.Payload.(unit.PayloadKLV))
+				klv := u.Payload.(unit.PayloadKLV)
+				if timed {
+					rtpTimestamp, ok := timestampMapper.translate(u.PTS)
+					if !ok {
+						missingVideoTimestampCount++
+						if missingVideoTimestampCount == 1 {
+							r.Parent.Log(logger.Warn,
+								"discarding timed KLV messages until a video timestamp is available")
+						}
+						return nil
+					}
+					if missingVideoTimestampCount != 0 {
+						r.Parent.Log(logger.Warn, "timed KLV messages discarded before a video timestamp became available: %d",
+							missingVideoTimestampCount)
+						missingVideoTimestampCount = 0
+					}
+					dataChan.Write(marshalTimedKLV(klv, rtpTimestamp))
+				} else {
+					dataChan.Write(klv)
+				}
 				return nil
 			})
 
@@ -735,13 +859,24 @@ func FromStream(
 	r *stream.Reader,
 	pc *PeerConnection,
 ) error {
-	videoTrack, err := setupVideoTrack(desc, r)
+	var klvFormat *format.KLV
+	hasTimedKLV := pc.KLVDataChannelFormat == conf.WebRTCKLVDataChannelFormatTimed &&
+		desc.FindFormat(&klvFormat) != nil
+
+	var timestampMapper *videoTimestampMapper
+	if hasTimedKLV {
+		timestampMapper = &videoTimestampMapper{}
+	}
+
+	videoTrack, err := setupVideoTrack(desc, r, timestampMapper)
 	if err != nil {
 		return err
 	}
 
 	if videoTrack != nil {
 		pc.OutboundTracks = append(pc.OutboundTracks, videoTrack)
+	} else if hasTimedKLV {
+		return fmt.Errorf("timed KLV data channel requires a supported video track")
 	}
 
 	audioTrack, err := setupAudioTrack(desc, r)
@@ -753,7 +888,7 @@ func FromStream(
 		pc.OutboundTracks = append(pc.OutboundTracks, audioTrack)
 	}
 
-	klvDataChan, err := setupKLVDataChannel(desc, r)
+	klvDataChan, err := setupKLVDataChannel(desc, r, pc.KLVDataChannelFormat, timestampMapper)
 	if err != nil {
 		return err
 	}

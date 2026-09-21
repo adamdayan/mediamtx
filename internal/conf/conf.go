@@ -203,10 +203,13 @@ type nilLogger struct{}
 func (nilLogger) Log(_ logger.Level, _ string, _ ...any) {
 }
 
+// defaultAuthInternalUsers is kept in the form produced by setAllNilSlicesToEmptyRecursive
+// (empty slices, not nil), so that Validate() can compare a loaded configuration against it.
 var defaultAuthInternalUsers = []AuthInternalUser{
 	{
 		User: "any",
 		Pass: "",
+		IPs:  IPNetworks{},
 		Permissions: []AuthInternalUserPermission{
 			{
 				Action: AuthActionPublish,
@@ -369,28 +372,32 @@ type Conf struct {
 	HLSCDNSecret       string     `json:"hlsCDNSecret"`
 
 	// WebRTC server
-	WebRTC                      bool              `json:"webrtc"`
-	WebRTCDisable               *bool             `json:"webrtcDisable,omitempty" deprecated:"true"`
-	WebRTCAddress               string            `json:"webrtcAddress"`
-	WebRTCEncryption            bool              `json:"webrtcEncryption"`
-	WebRTCServerKey             string            `json:"webrtcServerKey"`
-	WebRTCServerCert            string            `json:"webrtcServerCert"`
-	WebRTCAllowOrigin           *string           `json:"webrtcAllowOrigin,omitempty" deprecated:"true"`
-	WebRTCAllowOrigins          []string          `json:"webrtcAllowOrigins"`
-	WebRTCTrustedProxies        IPNetworks        `json:"webrtcTrustedProxies"`
-	WebRTCLocalUDPAddress       string            `json:"webrtcLocalUDPAddress"`
-	WebRTCLocalTCPAddress       string            `json:"webrtcLocalTCPAddress"`
-	WebRTCIPsFromInterfaces     bool              `json:"webrtcIPsFromInterfaces"`
-	WebRTCIPsFromInterfacesList []string          `json:"webrtcIPsFromInterfacesList"`
-	WebRTCAdditionalHosts       []string          `json:"webrtcAdditionalHosts"`
-	WebRTCICEServers2           []WebRTCICEServer `json:"webrtcICEServers2"`
-	WebRTCSTUNGatherTimeout     Duration          `json:"webrtcSTUNGatherTimeout"`
-	WebRTCHandshakeTimeout      Duration          `json:"webrtcHandshakeTimeout"`
-	WebRTCTrackGatherTimeout    Duration          `json:"webrtcTrackGatherTimeout"`
-	WebRTCICEUDPMuxAddress      *string           `json:"webrtcICEUDPMuxAddress,omitempty" deprecated:"true"`
-	WebRTCICETCPMuxAddress      *string           `json:"webrtcICETCPMuxAddress,omitempty" deprecated:"true"`
-	WebRTCICEHostNAT1To1IPs     *[]string         `json:"webrtcICEHostNAT1To1IPs,omitempty" deprecated:"true"`
-	WebRTCICEServers            *[]string         `json:"webrtcICEServers,omitempty" deprecated:"true"`
+	WebRTC                             bool              `json:"webrtc"`
+	WebRTCDisable                      *bool             `json:"webrtcDisable,omitempty" deprecated:"true"`
+	WebRTCAddress                      string            `json:"webrtcAddress"`
+	WebRTCEncryption                   bool              `json:"webrtcEncryption"`
+	WebRTCServerKey                    string            `json:"webrtcServerKey"`
+	WebRTCServerCert                   string            `json:"webrtcServerCert"`
+	WebRTCAllowOrigin                  *string           `json:"webrtcAllowOrigin,omitempty" deprecated:"true"`
+	WebRTCAllowOrigins                 []string          `json:"webrtcAllowOrigins"`
+	WebRTCTrustedProxies               IPNetworks        `json:"webrtcTrustedProxies"`
+	WebRTCLocalUDPAddress              string            `json:"webrtcLocalUDPAddress"`
+	WebRTCLocalTCPAddress              string            `json:"webrtcLocalTCPAddress"`
+	WebRTCIPsFromInterfaces            bool              `json:"webrtcIPsFromInterfaces"`
+	WebRTCIPsFromInterfacesList        []string          `json:"webrtcIPsFromInterfacesList"`
+	WebRTCIPsFromInterfacesExcludeList []string          `json:"webrtcIPsFromInterfacesExcludeList"`
+	WebRTCAdditionalHosts              []string          `json:"webrtcAdditionalHosts"`
+	WebRTCICEServers2                  []WebRTCICEServer `json:"webrtcICEServers2"`
+	WebRTCSTUNGatherTimeout            Duration          `json:"webrtcSTUNGatherTimeout"`
+	WebRTCHandshakeTimeout             Duration          `json:"webrtcHandshakeTimeout"`
+	WebRTCTrackGatherTimeout           Duration          `json:"webrtcTrackGatherTimeout"`
+
+	WebRTCKLVDataChannelFormat WebRTCKLVDataChannelFormat `json:"webrtcKLVDataChannelFormat"`
+
+	WebRTCICEUDPMuxAddress  *string   `json:"webrtcICEUDPMuxAddress,omitempty" deprecated:"true"`
+	WebRTCICETCPMuxAddress  *string   `json:"webrtcICETCPMuxAddress,omitempty" deprecated:"true"`
+	WebRTCICEHostNAT1To1IPs *[]string `json:"webrtcICEHostNAT1To1IPs,omitempty" deprecated:"true"`
+	WebRTCICEServers        *[]string `json:"webrtcICEServers,omitempty" deprecated:"true"`
 
 	// SRT server
 	SRT        bool   `json:"srt"`
@@ -438,7 +445,7 @@ func (conf *Conf) setDefaults() {
 
 	// Authentication
 	conf.AuthMethod = AuthMethodInternal
-	conf.AuthInternalUsers = defaultAuthInternalUsers
+	conf.AuthInternalUsers = deepClone(reflect.ValueOf(defaultAuthInternalUsers)).Interface().([]AuthInternalUser)
 	conf.AuthJWTClaimKey = "mediamtx_permissions"
 
 	// Control API
@@ -520,6 +527,7 @@ func (conf *Conf) setDefaults() {
 	conf.WebRTCSTUNGatherTimeout = 5 * Duration(time.Second)
 	conf.WebRTCHandshakeTimeout = 10 * Duration(time.Second)
 	conf.WebRTCTrackGatherTimeout = 2 * Duration(time.Second)
+	conf.WebRTCKLVDataChannelFormat = WebRTCKLVDataChannelFormatRaw
 
 	// SRT server
 	conf.SRT = true

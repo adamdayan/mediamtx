@@ -408,6 +408,9 @@ webrtcIPsFromInterfaces: true
 # Interfaces whose IPs will be sent to clients.
 # An empty value means to use all available interfaces.
 webrtcIPsFromInterfacesList: []
+# Interfaces whose IPs will NOT be sent to clients.
+# This is useful to exclude specific interfaces (e.g. VPN tunnels) while using all others.
+webrtcIPsFromInterfacesExcludeList: []
 # Additional hosts or IPs to send to clients.
 webrtcAdditionalHosts: []
 # ICE servers. Needed only when local listeners can't be reached by clients.
@@ -426,6 +429,11 @@ webrtcSTUNGatherTimeout: 5s
 webrtcHandshakeTimeout: 10s
 # Maximum time to gather tracks.
 webrtcTrackGatherTimeout: 2s
+# Format of KLV messages sent through the WebRTC data channel.
+# Available values are "raw" and "timed".
+# "timed" is a server-wide opt-in that changes the channel label and payload format,
+# requires a supported video track, and discards KLV until the first video frame arrives.
+webrtcKLVDataChannelFormat: raw
 
 ###############################################
 # Global settings -> SRT server

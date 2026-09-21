@@ -19,6 +19,7 @@ import (
 	"github.com/pion/transport/v4"
 	"github.com/pion/webrtc/v4"
 
+	"github.com/bluenviron/mediamtx/internal/conf"
 	"github.com/bluenviron/mediamtx/internal/logger"
 )
 
@@ -27,7 +28,7 @@ const (
 	twccExtensionURI = "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01"
 )
 
-func interfaceIPs(interfaceList []string) ([]string, error) {
+func interfaceIPs(interfaceList []string, excludeList []string) ([]string, error) {
 	intfs, err := net.Interfaces()
 	if err != nil {
 		return nil, err
@@ -36,6 +37,9 @@ func interfaceIPs(interfaceList []string) ([]string, error) {
 	var ips []string
 
 	for _, intf := range intfs {
+		if slices.Contains(excludeList, intf.Name) {
+			continue
+		}
 		if len(interfaceList) == 0 || slices.Contains(interfaceList, intf.Name) {
 			var addrs []net.Addr
 			addrs, err = intf.Addrs()
@@ -171,20 +175,22 @@ type trackRecvPair struct {
 
 // PeerConnection is a wrapper around webrtc.PeerConnection.
 type PeerConnection struct {
-	Net                   transport.Net
-	LocalRandomUDP        bool
-	ICEUDPMux             ice.UDPMux
-	ICETCPMux             *TCPMuxWrapper
-	ICEServers            []webrtc.ICEServer
-	IPsFromInterfaces     bool
-	IPsFromInterfacesList []string
-	AdditionalHosts       []string
-	STUNGatherTimeout     time.Duration
-	SupportsIPv6          bool
-	Publish               bool
-	OutboundTracks        []*OutboundTrack
-	OutboundDataChannels  []*OutboundDataChannel
-	Log                   logger.Writer
+	Net                          transport.Net
+	LocalRandomUDP               bool
+	ICEUDPMux                    ice.UDPMux
+	ICETCPMux                    *TCPMuxWrapper
+	ICEServers                   []webrtc.ICEServer
+	IPsFromInterfaces            bool
+	IPsFromInterfacesList        []string
+	IPsFromInterfacesExcludeList []string
+	AdditionalHosts              []string
+	STUNGatherTimeout            time.Duration
+	SupportsIPv6                 bool
+	Publish                      bool
+	KLVDataChannelFormat         conf.WebRTCKLVDataChannelFormat
+	OutboundTracks               []*OutboundTrack
+	OutboundDataChannels         []*OutboundDataChannel
+	Log                          logger.Writer
 
 	wr               *webrtc.PeerConnection
 	ctx              context.Context
@@ -486,7 +492,7 @@ func (co *PeerConnection) removeUnwantedCandidates(firstMedia *sdp.MediaDescript
 	var allowedIPs []string
 	if co.IPsFromInterfaces {
 		var err error
-		allowedIPs, err = interfaceIPs(co.IPsFromInterfacesList)
+		allowedIPs, err = interfaceIPs(co.IPsFromInterfacesList, co.IPsFromInterfacesExcludeList)
 		if err != nil {
 			return err
 		}
